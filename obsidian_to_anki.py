@@ -31,10 +31,30 @@ logging.basicConfig(
 
 MEDIA = dict()
 
-ID_PREFIX = "ID: "
+ID_PREFIX = "ID: "  # Legacy marker, still recognised when reading old notes.
+# Marker written back into notes as a clickable Anki link:
+#   *Anki Reference: [Card <id>](anki://x-callback-url/search?query=cid:<id>)*
+ANKI_REF_LINK = (
+    r"\*Anki Reference: \[Card (?P<_anki_new_id>\d+)\]"
+    r"\(anki://x-callback-url/search\?query=cid:(?P=_anki_new_id)\)\*"
+)
+LEGACY_ID_LINK = r"(?:<!--[ \t]*)?ID: (?P<_anki_legacy_id>\d+)"
+ID_MARKER = r"(?:" + ANKI_REF_LINK + r"|" + LEGACY_ID_LINK + r")"
+# String fragment matching the id marker, with the id captured as the trailing
+# two groups (new form or legacy form). Used when composing larger regexes.
+ID_LINK_REGEXP_STR = r"\n?(?:" + ANKI_REF_LINK + r"|" + LEGACY_ID_LINK + r".*)"
 TAG_PREFIX = "Tags: "
 TAG_SEP = " "
 Note_and_id = collections.namedtuple('Note_and_id', ['note', 'id'])
+
+
+def _id_from_match(match):
+    """Extract the numeric note id from a match of either marker form."""
+    if match is None:
+        return None
+    newid = match.group("_anki_new_id")
+    legacyid = match.group("_anki_legacy_id")
+    return int(newid if newid is not None else legacyid)
 NOTE_DICT_TEMPLATE = {
     "deckName": "",
     "modelName": "",
@@ -499,20 +519,17 @@ class Note:
     Does NOT deal with finding the note in the file.
     """
 
-    ID_REGEXP = re.compile(
-        r"(?:<!--)?" + ID_PREFIX + r"(\d+)"
-    )
+    ID_REGEXP = re.compile(ID_MARKER)
 
     def __init__(self, note_text):
         """Set up useful variables."""
         self.text = note_text
         self.lines = self.text.splitlines()
         self.current_field_num = 0
-        if Note.ID_REGEXP.match(self.lines[-1]):
-            self.identifier = int(
-                Note.ID_REGEXP.match(self.lines.pop()).group(1)
-            )
-            # The above removes the identifier line, for convenience of parsing
+        id_match = Note.ID_REGEXP.match(self.lines[-1])
+        if id_match:
+            self.identifier = _id_from_match(id_match)
+            self.lines.pop()  # Removes the identifier line
         else:
             self.identifier = None
         if self.lines[-1].startswith(TAG_PREFIX):
@@ -575,7 +592,7 @@ class Note:
 
 class InlineNote(Note):
 
-    ID_REGEXP = re.compile(r"(?:<!--)?" + ID_PREFIX + r"(\d+)")
+    ID_REGEXP = re.compile(ID_MARKER)
     TAG_REGEXP = re.compile(TAG_PREFIX + r"(.*)")
     TYPE_REGEXP = re.compile(r"\[(.*?)\]")  # So e.g. [Basic]
 
@@ -584,7 +601,7 @@ class InlineNote(Note):
         self.current_field_num = 0
         ID = InlineNote.ID_REGEXP.search(self.text)
         if ID is not None:
-            self.identifier = int(ID.group(1))
+            self.identifier = _id_from_match(ID)
             self.text = self.text[:ID.start()]  # Removes identifier
         else:
             self.identifier = None
@@ -624,7 +641,7 @@ class InlineNote(Note):
 
 
 class RegexNote:
-    ID_REGEXP_STR = r"\n?(?:<!--)?(?:" + ID_PREFIX + r"(\d+).*)"
+    ID_REGEXP_STR = ID_LINK_REGEXP_STR
     TAG_REGEXP_STR = r"(" + TAG_PREFIX + r".*)"
 
     def __init__(self, matchobject, note_type, tags=False, id=False):
@@ -633,8 +650,9 @@ class RegexNote:
         self.groups = list(self.match.groups())
         self.group_num = len(self.groups)
         if id:
-            # This means id is last group
-            self.identifier = int(self.groups.pop())
+            # The id is captured by the two trailing groups (new or legacy)
+            self.identifier = _id_from_match(self.match)
+            self.groups = self.groups[:-2]
         else:
             self.identifier = None
         if tags:
@@ -1099,8 +1117,8 @@ class App:
                     [
                         r"^",
                         CONFIG_DATA["NOTE_PREFIX"],
-                        r"\n(?:<!--)?",
-                        ID_PREFIX,
+                        r"\n",
+                        ID_MARKER,
                         r"[\s\S]*?\n",
                         CONFIG_DATA["NOTE_SUFFIX"]
                     ]
@@ -1132,7 +1150,7 @@ class App:
                 "".join(
                     [
                         CONFIG_DATA["INLINE_PREFIX"],
-                        r"\s+(?:<!--)?" + ID_PREFIX + r".*?",
+                        r"\s+" + ID_MARKER + r".*?",
                         CONFIG_DATA["INLINE_SUFFIX"]
                     ]
                 )
@@ -1299,15 +1317,20 @@ class File:
         # Finally, scan for deleting notes
         for match in RegexFile.EMPTY_REGEXP.finditer(self.file):
             self.notes_to_delete.append(
-                int(match.group(1))
+                _id_from_match(match)
             )
 
     @staticmethod
     def id_to_str(id, inline=False, comment=False):
-        """Get the string repr of id."""
-        result = ID_PREFIX + str(id)
-        if comment:
-            result = "<!--" + result + "-->"
+        """Get the string repr of id (a clickable Anki reference link).
+
+        The legacy 'comment' option is accepted for compatibility but is
+        ignored: the new marker is a Markdown link and must stay visible.
+        """
+        result = (
+            "*Anki Reference: [Card {id}]"
+            "(anki://x-callback-url/search?query=cid:{id})*".format(id=id)
+        )
         if inline:
             result += " "
         else:
@@ -1480,7 +1503,7 @@ class RegexFile(File):
         # Finally, scan for deleting notes
         for match in RegexFile.EMPTY_REGEXP.finditer(self.file):
             self.notes_to_delete.append(
-                int(match.group(1))
+                _id_from_match(match)
             )
 
     def search(self, note_type, regexp):
@@ -1579,7 +1602,7 @@ class RegexFile(File):
     def fix_newline_ids(self):
         """Removes double newline then ids from self.file."""
         double_regexp = re.compile(
-            r"(\r\n|\r|\n){2}(?:<!--)?" + ID_PREFIX + r"\d+"
+            r"(\r\n|\r|\n){2}" + ID_MARKER
         )
         self.file = double_regexp.sub(
             lambda x: x.group()[1:],
