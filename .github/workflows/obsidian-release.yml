@@ -1,5 +1,8 @@
 name: Release Obsidian Plugin
 
+permissions:
+  contents: write
+
 env:
   PLUGIN_NAME: obsidian-to-anki-plugin # Change this to match the id of your plugin.
 
