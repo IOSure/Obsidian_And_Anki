@@ -170,3 +170,19 @@ git rev-list -n1 v3.7.0                   # c164dce…（确认指向正确）
 
 > `main.js` 由工作流从 `src/` 构建，不入 git；本次 Release 里的 `main.js` 是新 ID 链接格式。
 
+### 6. 发布遇到的两个问题与修复
+
+| 问题 | 原因 | 修复 |
+|---|---|---|
+| 首次手动 dispatch 运行在 **Release 步失败** | 工作流缺 `permissions`，`softprops/action-gh-release` 无 `contents: write` 权限无法建 Release | 工作流顶部新增 `permissions: contents: write`（提交 `ce29da9`） |
+| 标签推送曾未触发运行 | 事件/时序问题 | 重新 `git tag -d v3.7.0` → 删远端标签 → 重建到最新提交 → 推送，触发 Actions |
+
+### 7. 最终发布验证（GitHub Actions + 下载校验）
+
+- 触发：`push tags v3.7.0` → 运行成功（Build / Package / **Release 全部 success，run 已完成）。
+- Release：`v3.7.0`，`draft:false`、非预发布，`published_at 2026-09-26T15:33:34Z`。
+- 资产（4 个）：`main.js`、`manifest.json`、`styles.css`、`obsidian-to-anki-plugin-v3.7.0.zip`，自动生成 Full Changelog。
+- 下载发布包 `main.js`（1962713 字节）校验：`Anki Reference`×6、`anki://x-callback-url/search?query=cid:`×2、旧写入 0 处 → **新 ID 链接格式确认**。
+- 地址：https://github.com/IOSure/Obsidian_And_Anki/releases/tag/v3.7.0
+
+
