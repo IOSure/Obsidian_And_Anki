@@ -10,8 +10,22 @@ import { FileData } from './interfaces/settings-interface'
 
 const TAG_PREFIX:string = "Tags: "
 export const TAG_SEP:string = " "
-export const ID_REGEXP_STR: string = String.raw`\n?(?:<!--)?(?:ID: (\d+).*)`
+// Marker written back into notes as a clickable Anki link:
+//   *Anki Reference: [Card <id>](anki://x-callback-url/search?query=cid:<id>)*
+// The reader also recognises the legacy "ID: <id>" / "<!--ID: <id>-->" marker.
+const ANKI_REF_LINK: string = String.raw`\*Anki Reference: \[Card (?<_anki_new_id>\d+)\]\(anki://x-callback-url/search\?query=cid:\k<_anki_new_id>\)\*`
+const LEGACY_ID_LINK: string = String.raw`(?:<!--[ \t]*)?ID: (?<_anki_legacy_id>\d+)`
+export const ID_REGEXP_STR: string = String.raw`\n?(?:` + ANKI_REF_LINK + String.raw`|` + LEGACY_ID_LINK + String.raw`.*)`
 export const TAG_REGEXP_STR: string = String.raw`(Tags: .*)`
+
+// Extract the numeric note id from a match of either marker form.
+export function get_id_from_match(match: RegExpMatchArray): number | null {
+    const groups: { [key: string]: string | undefined } | undefined = match.groups
+    if (!groups) return null
+    const raw = groups._anki_new_id !== undefined ? groups._anki_new_id : groups._anki_legacy_id
+    if (raw === undefined || raw === null) return null
+    return parseInt(raw)
+}
 const OBS_TAG_REGEXP: RegExp = /#(\w+)/g
 
 const ANKI_CLOZE_REGEXP: RegExp = /{{c\d+::[\s\S]+?}}/
@@ -43,7 +57,7 @@ abstract class AbstractNote {
     note_type: string
     field_names: string[]
     current_field: string
-    ID_REGEXP: RegExp = /(?:<!--)?ID: (\d+)/
+    ID_REGEXP: RegExp = /\*Anki Reference: \[Card (?<_anki_new_id>\d+)\]\(anki:\/\/x-callback-url\/search\?query=cid:\k<_anki_new_id>\)\*|(?:<!--[ \t]*)?ID: (?<_anki_legacy_id>\d+)/
     formatter: FormatConverter
     curly_cloze: boolean
 	highlights_to_cloze: boolean
@@ -119,8 +133,10 @@ export class Note extends AbstractNote {
     }
 
     getIdentifier(): number | null {
-        if (this.ID_REGEXP.test(this.split_text[this.split_text.length-1])) {
-            return parseInt(this.ID_REGEXP.exec(this.split_text.pop())[1])
+        const result = this.ID_REGEXP.exec(this.split_text[this.split_text.length-1])
+        if (result) {
+            this.split_text.pop()
+            return get_id_from_match(result)
         } else {
             return null
         }
@@ -174,7 +190,7 @@ export class Note extends AbstractNote {
 export class InlineNote extends AbstractNote {
 
     static TAG_REGEXP: RegExp = /Tags: (.*)/;
-    static ID_REGEXP: RegExp = /(?:<!--)?ID: (\d+)/;
+    static ID_REGEXP: RegExp = /\*Anki Reference: \[Card (?<_anki_new_id>\d+)\]\(anki:\/\/x-callback-url\/search\?query=cid:\k<_anki_new_id>\)\*|(?:<!--[ \t]*)?ID: (?<_anki_legacy_id>\d+)/;
     static TYPE_REGEXP: RegExp = /\[(.*?)\]/;
 
     getSplitText(): string[] {
@@ -185,7 +201,7 @@ export class InlineNote extends AbstractNote {
         const result = this.text.match(InlineNote.ID_REGEXP)
         if (result) {
             this.text = this.text.slice(0,result.index).trim()
-            return parseInt(result[1])
+            return get_id_from_match(result)
         } else {
             return null
         }
@@ -258,7 +274,15 @@ export class RegexNote {
 	) {
 		this.match = match
 		this.note_type = note_type
-		this.identifier = id ? parseInt(this.match.pop()) : null
+		if (id) {
+			this.identifier = get_id_from_match(match)
+			// Remove the two trailing id capture groups (new form and legacy
+			// form), leaving the field groups to map to the note fields.
+			this.match.pop()
+			this.match.pop()
+		} else {
+			this.identifier = null
+		}
 		this.tags = tags ? this.match.pop().slice(TAG_PREFIX.length).split(TAG_SEP) : []
 		this.field_names = fields_dict[note_type]
 		this.curly_cloze = curly_cloze

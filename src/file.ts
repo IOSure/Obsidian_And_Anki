@@ -3,20 +3,19 @@
 import { FROZEN_FIELDS_DICT } from './interfaces/field-interface'
 import { AnkiConnectNote, AnkiConnectNoteAndID } from './interfaces/note-interface'
 import { FileData } from './interfaces/settings-interface'
-import { Note, InlineNote, RegexNote, CLOZE_ERROR, NOTE_TYPE_ERROR, TAG_SEP, ID_REGEXP_STR, TAG_REGEXP_STR } from './note'
+import { Note, InlineNote, RegexNote, CLOZE_ERROR, NOTE_TYPE_ERROR, TAG_SEP, ID_REGEXP_STR, TAG_REGEXP_STR, get_id_from_match } from './note'
 import { Md5 } from 'ts-md5/dist/md5';
 import * as AnkiConnect from './anki'
 import * as c from './constants'
 import { FormatConverter } from './format'
 import { CachedMetadata, HeadingCache } from 'obsidian'
 
-const double_regexp: RegExp = /(?:\r\n|\r|\n)((?:\r\n|\r|\n)(?:<!--)?ID: \d+)/g
+const double_regexp: RegExp = /(?:\r\n|\r|\n)((?:\r\n|\r|\n)(?:\*Anki Reference: \[Card \d+\]\(anki:\/\/x-callback-url\/search\?query=cid:\d+\)\*|(?:<!--[ \t]*)?ID: \d+))/g
 
 function id_to_str(identifier:number, inline:boolean = false, comment:boolean = false): string {
-    let result = "ID: " + identifier.toString()
-    if (comment) {
-        result = "<!--" + result + "-->"
-    }
+    // The legacy 'comment' option is accepted for compatibility but ignored:
+    // the marker is a Markdown link and must stay visible.
+    let result = "*Anki Reference: [Card " + identifier.toString() + "](anki://x-callback-url/search?query=cid:" + identifier.toString() + ")*"
     if (inline) {
         result += " "
     } else {
@@ -146,7 +145,10 @@ abstract class AbstractFile {
 
     scanDeletions() {
         for (let match of this.file.matchAll(this.data.EMPTY_REGEXP)) {
-            this.notes_to_delete.push(parseInt(match[1]))
+            const id = get_id_from_match(match)
+            if (id !== null) {
+                this.notes_to_delete.push(id)
+            }
         }
     }
 
