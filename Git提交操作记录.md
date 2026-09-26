@@ -95,3 +95,78 @@ commit 981a10725d44f8e6cfd84774da2e55d46d53cba1 (HEAD -> master, origin/master)
 
 - 推送使用 SSH 方式（`git@github.com:...`），无需输入凭证即成功。
 - `architecture.*` 系列文件与本任务无关，未纳入提交；如需清理可另行处理。
+
+---
+
+## 七、后续提交与发布操作
+
+### 1. 版本升级提交 `2ad54d5`（manifest.json / versions.json）
+
+发布前按 Obsidian 插件规则手动改版本文件并**先于打标签提交**：
+
+| 文件 | 改动 |
+|---|---|
+| `manifest.json` | `version`：`3.6.0 → 3.7.0` |
+| `versions.json` | 顶部新增 `"3.7.0": "0.9.20"` |
+
+```bash
+git add manifest.json versions.json
+git commit -m "Bump version to 3.7.0"
+git push origin master    # 8f8e3f2 之前、2ad54d5 推送
+```
+> 网页端创建 Release 不会自动改这两个文件，必须手动改并先提交。
+
+### 2. TS 源码镜像提交 `8f8e3f2`（src/note.ts、src/file.ts、package-lock.json）
+
+把 Python 端的 ID 新格式改动镜像进 TS 插件源码（否则发布构建出的 `main.js` 仍是旧格式）。提交前先本地验证：
+
+```bash
+npm install          # 本地原本无 node_modules
+npm run build        # rollup 构建，created main.js in 1.5s
+grep -c "Anki Reference" main.js        # 6
+grep -c "anki://x-callback-url" main.js # 2
+```
+再用 Node 复刻正则做功能测试（新/旧/注释/带空格/无 ID/删除采集/RegexNote 分组）全部通过，然后：
+
+```bash
+git add src/note.ts src/file.ts package-lock.json
+git commit -m "Mirror clickable Anki reference link to TS plugin source (src/)"
+git push origin master   # 8f8e3f2..推送
+```
+
+### 3. 发布形态：draft → 直接发布 `c164dce`
+
+参考仓库 `ObsidianToAnki/Obsidian_to_Anki` 是**自动直接发布**，而本仓库工作流 `draft: true`。改为 `false`：
+
+```bash
+# 编辑 .github/workflows/obsidian-release.yml: draft: true → draft: false
+git add .github/workflows/obsidian-release.yml
+git commit -m "Publish releases directly instead of drafts"
+git push origin master   # 8f8e3f2..c164dce master -> master
+```
+
+### 4. 标签 `v3.7.0` 重指向（两次）
+
+`v3.7.0` 需指向「包含 TS 改动 + draft:false 工作流」的最终提交 `c164dce`，因此重打标签并推送（触发发布工作流重建 `main.js` 并自动发布）：
+
+```bash
+git tag -d v3.7.0
+git push origin :refs/tags/v3.7.0        # 删除远端标签
+git tag v3.7.0 c164dce
+git push origin v3.7.0                    # 重新推送，触发 Actions
+git rev-list -n1 v3.7.0                   # c164dce…（确认指向正确）
+```
+
+### 5. 发布结果
+
+| 项目 | 值 |
+|---|---|
+| 触发方式 | `push tags v3.7.0`（push 到 `c164dce`） |
+| 工作流 | `.github/workflows/obsidian-release.yml` |
+| 构建 | `npm install obsidian` → `npm install` → `npm ci` → `npm run build` |
+| 打包 | `main.js`、`manifest.json`、`styles.css`、`README.md` → `obsidian-to-anki-plugin-3.7.0.zip` |
+| Release 资产 | `main.js`、`manifest.json`、`styles.css`、`obsidian-to-anki-plugin-3.7.0.zip`、Source code(zip/tar.gz) |
+| 发布 | `draft: false`，自动生成 What's Changed / Full Changelog，直接发布正式 Release |
+
+> `main.js` 由工作流从 `src/` 构建，不入 git；本次 Release 里的 `main.js` 是新 ID 链接格式。
+
